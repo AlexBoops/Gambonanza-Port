@@ -14,7 +14,7 @@
       #unity-logo { width: 154px; height: 130px; background: url('TemplateData/unity-logo-dark.png') no-repeat center; }
       #unity-progress-bar-empty { width: 141px; height: 18px; margin-top: 10px; background: url('TemplateData/progress-bar-empty-dark.png') no-repeat center; }
       #unity-progress-bar-full { width: 0%; height: 18px; margin-top: 10px; background: url('TemplateData/progress-bar-full-dark.png') no-repeat center; }
-      #unity-footer { display: none; }
+      #unity-warning { }
     </style>
   </head>
   <body>
@@ -50,35 +50,76 @@
         updateBannerVisibility();
       }
 
-      // Build uses uncompressed files (no .br)
-      var buildUrl = "Build";
-      var loaderUrl = buildUrl + "/Downloads.loader.js";
-      var config = {
-        arguments: [],
-        dataUrl: buildUrl + "/Downloads.data",
-        frameworkUrl: buildUrl + "/Downloads.framework.js",
-        codeUrl: buildUrl + "/Downloads.wasm",
-        streamingAssetsUrl: "StreamingAssets",
-        companyName: "Blukulele",
-        productName: "GamboNanza",
-        productVersion: "1.0",
-        showBanner: unityShowBanner
+      // Configuration for split files matching your Build folder structure
+      var chunkMap = {
+        "Build/Downloads.data": 5, // Downloads.data.part1 -> Downloads.data.part5
+        "Build/Downloads.wasm": 3  // Downloads.wasm.part1 -> Downloads.wasm.part3
       };
 
-      script = document.createElement("script");
-      script.src = loaderUrl;
-      script.onload = () => {
-        createUnityInstance(canvas, config, (progress) => {
-          var bar = document.querySelector("#unity-progress-bar-full");
-          if (bar) bar.style.width = (progress * 100) + "%";
-        }).then((unityInstance) => {
-          var bar = document.querySelector("#unity-loading-bar");
-          if (bar) bar.style.display = "none";
-        }).catch((message) => {
-          alert(message);
+      // Helper to fetch and stitch chunk parts into a single Blob URL
+      async function fetchAndStitchChunks(baseUrl, totalParts, onProgress) {
+        var parts = [];
+        var loadedBytes = [];
+
+        for (var i = 1; i <= totalParts; i++) {
+          var partUrl = baseUrl + ".part" + i;
+          var response = await fetch(partUrl);
+          if (!response.ok) throw new Error("Failed to load chunk part: " + partUrl);
+          var buffer = await response.arrayBuffer();
+          parts.push(buffer);
+          if (onProgress) onProgress(i / totalParts);
+        }
+
+        var blob = new Blob(parts, { type: "application/octet-stream" });
+        return URL.createObjectURL(blob);
+      }
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/Downloads.loader.js";
+
+      async function launchGame() {
+        var bar = document.querySelector("#unity-progress-bar-full");
+
+        // Stitch split .data and .wasm chunks into local memory Blob URLs
+        var dataBlobUrl = await fetchAndStitchChunks(buildUrl + "/Downloads.data", chunkMap["Build/Downloads.data"], function(p) {
+          if (bar) bar.style.width = (p * 50) + "%"; // First 50% for chunk download
         });
-      };
-      document.body.appendChild(script);
+
+        var wasmBlobUrl = await fetchAndStitchChunks(buildUrl + "/Downloads.wasm", chunkMap["Build/Downloads.wasm"], function(p) {
+          if (bar) bar.style.width = (50 + (p * 20)) + "%"; // Next 20% for WASM download
+        });
+
+        var config = {
+          arguments: [],
+          dataUrl: dataBlobUrl,
+          frameworkUrl: buildUrl + "/Downloads.framework.js",
+          codeUrl: wasmBlobUrl,
+          streamingAssetsUrl: "StreamingAssets",
+          companyName: "Blukulele",
+          productName: "GamboNanza",
+          productVersion: "1.0",
+          showBanner: unityShowBanner
+        };
+
+        var script = document.createElement("script");
+        script.src = loaderUrl;
+        script.onload = () => {
+          createUnityInstance(canvas, config, (progress) => {
+            if (bar) bar.style.width = (70 + (progress * 30)) + "%"; // Remaining 30% for Unity engine init
+          }).then((unityInstance) => {
+            var loadingBar = document.querySelector("#unity-loading-bar");
+            if (loadingBar) loadingBar.style.display = "none";
+          }).catch((message) => {
+            alert(message);
+          });
+        };
+        document.body.appendChild(script);
+      }
+
+      launchGame().catch(function(err) {
+        console.error("Failed to assemble WebGL build chunks:", err);
+        unityShowBanner("Failed to assemble build payload chunks. Check console.", "error");
+      });
     </script>
   </body>
 </html>
