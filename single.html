@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>GamboNanza</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background-color: #0b0d12;
+        color: #00ffcc;
+        font-family: 'Consolas', 'Courier New', monospace;
+        overflow: hidden;
+      }
+      #unity-container {
+        position: absolute;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      #unity-canvas {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+        background: #0b0d12;
+      }
+      #custom-loader {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: rgba(11, 13, 18, 0.95);
+        padding: 35px 45px;
+        border: 2px solid #00ffcc;
+        border-radius: 8px;
+        box-shadow: 0 0 25px rgba(0, 255, 204, 0.25);
+        z-index: 10;
+        min-width: 360px;
+      }
+      .ascii-art {
+        color: #00ffcc;
+        font-weight: bold;
+        white-space: pre;
+        line-height: 1.1;
+        font-size: 14px;
+        text-shadow: 0 0 10px rgba(0, 255, 204, 0.7);
+        margin-bottom: 15px;
+        text-align: center;
+      }
+      .title {
+        font-size: 22px;
+        font-weight: bold;
+        letter-spacing: 3px;
+        color: #ffffff;
+        margin-bottom: 15px;
+        text-transform: uppercase;
+        text-shadow: 0 0 8px rgba(255, 255, 255, 0.4);
+      }
+      .info-panel {
+        width: 100%;
+        margin-bottom: 12px;
+        font-size: 13px;
+      }
+      .status-line {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 6px;
+        color: #e0e6ed;
+      }
+      .mb-line {
+        display: flex;
+        justify-content: space-between;
+        color: #00ffcc;
+        font-weight: bold;
+        margin-bottom: 10px;
+      }
+      #progress-box {
+        width: 100%;
+        height: 18px;
+        border: 1px solid #00ffcc;
+        border-radius: 4px;
+        padding: 2px;
+        background: #141a24;
+        box-shadow: inset 0 0 5px rgba(0,0,0,0.8);
+      }
+      #progress-bar-full {
+        width: 0%;
+        height: 100%;
+        background: #00ffcc;
+        box-shadow: 0 0 10px #00ffcc;
+        border-radius: 2px;
+        transition: width 0.1s linear;
+      }
+      #unity-warning {
+        position: absolute;
+        top: 15px;
+        left: 15px;
+        z-index: 20;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="unity-container">
+      <canvas id="unity-canvas" tabindex="-1"></canvas>
+      
+      <div id="custom-loader">
+        <div class="title">GamboNanza</div>
+        <div class="ascii-art">
+   +=+
+  (   )
+   | |
+  /   \
+ (_____)
+ |     |
+(_______)
+        </div>
+        
+        <div class="info-panel">
+          <div class="status-line">
+            <span id="stage-text">Initializing stream...</span>
+            <span id="percent-text">0%</span>
+          </div>
+          <div class="mb-line">
+            <span id="mb-text">0.0 MB / -- MB</span>
+            <span id="speed-text">0.0 MB/s</span>
+          </div>
+        </div>
+
+        <div id="progress-box">
+          <div id="progress-bar-full"></div>
+        </div>
+      </div>
+
+      <div id="unity-warning"></div>
+    </div>
+
+    <script>
+      var canvas = document.querySelector("#unity-canvas");
+      var progressBar = document.querySelector("#progress-bar-full");
+      var stageText = document.querySelector("#stage-text");
+      var percentText = document.querySelector("#percent-text");
+      var mbText = document.querySelector("#mb-text");
+      var speedText = document.querySelector("#speed-text");
+      var loaderUI = document.querySelector("#custom-loader");
+
+      function unityShowBanner(msg, type) {
+        var warningBanner = document.querySelector("#unity-warning");
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        warningBanner.appendChild(div);
+        div.style = (type === 'error' ? 'background: #e53e3e; color: white;' : 'background: #ecc94b; color: black;') + 
+                    ' padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px;';
+        if (type !== 'error') {
+          setTimeout(function() { warningBanner.removeChild(div); }, 5000);
+        }
+      }
+
+      var cdnBase = "https://cdn.jsdelivr.net/gh/AlexBoops/Gambonanza-Port@main/Build";
+
+      var chunkMap = {
+        "data": { count: 5, prefix: cdnBase + "/Downloads.data.part" },
+        "wasm": { count: 3, prefix: cdnBase + "/Downloads.wasm.part" }
+      };
+
+      // Stream fetcher tracking total bytes and download speed
+      async function fetchChunkWithProgress(url, onChunkProgress) {
+        var response = await fetch(url);
+        if (!response.ok) throw new Error("Failed to load chunk: " + url);
+
+        var contentLength = response.headers.get('Content-Length');
+        var totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+        var loadedBytes = 0;
+
+        var reader = response.body.getReader();
+        var chunks = [];
+
+        while (true) {
+          var { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          loadedBytes += value.length;
+          onChunkProgress(value.length, totalBytes);
+        }
+
+        var allChunks = new Uint8Array(loadedBytes);
+        var position = 0;
+        for (var chunk of chunks) {
+          allChunks.set(chunk, position);
+          position += chunk.length;
+        }
+
+        return allChunks.buffer;
+      }
+
+      async function fetchAndStitchChunks(stageName, chunkInfo, globalStartWeight, globalEndWeight) {
+        stageText.innerText = stageName;
+        var parts = [];
+
+        var startTime = performance.now();
+        var bytesLoadedInStage = 0;
+
+        for (var i = 1; i <= chunkInfo.count; i++) {
+          var partUrl = chunkInfo.prefix + i;
+
+          var buffer = await fetchChunkWithProgress(partUrl, function(chunkBytes, chunkTotal) {
+            bytesLoadedInStage += chunkBytes;
+
+            var currentTime = performance.now();
+            var duration = (currentTime - startTime) / 1000; // seconds
+            var speedMBps = duration > 0 ? ((bytesLoadedInStage / (1024 * 1024)) / duration).toFixed(1) : "0.0";
+
+            var currentMB = (bytesLoadedInStage / (1024 * 1024)).toFixed(1);
+            
+            // Calculate progress for current stage
+            var stageProgress = (i - 1 + (chunkTotal ? (chunkBytes / chunkTotal) : 0.5)) / chunkInfo.count;
+            var globalPercent = Math.min(100, Math.round(globalStartWeight + (stageProgress * (globalEndWeight - globalStartWeight))));
+
+            mbText.innerText = currentMB + " MB (Chunk " + i + "/" + chunkInfo.count + ")";
+            speedText.innerText = speedMBps + " MB/s";
+            percentText.innerText = globalPercent + "%";
+            if (progressBar) progressBar.style.width = globalPercent + "%";
+          });
+
+          parts.push(buffer);
+        }
+
+        var blob = new Blob(parts, { type: "application/octet-stream" });
+        return URL.createObjectURL(blob);
+      }
+
+      async function launchGame() {
+        // 1. Fetch & Stitch Data files (0% -> 50%)
+        var dataBlobUrl = await fetchAndStitchChunks("Downloading Data Chunks", chunkMap["data"], 0, 50);
+
+        // 2. Fetch & Stitch WASM files (50% -> 80%)
+        var wasmBlobUrl = await fetchAndStitchChunks("Downloading Engine WASM", chunkMap["wasm"], 50, 80);
+
+        // 3. Unity Engine Bootstrapping (80% -> 100%)
+        stageText.innerText = "Booting Engine Runtime";
+        mbText.innerText = "Decompressing WASM...";
+        speedText.innerText = "Local";
+
+        var loaderUrl = cdnBase + "/Downloads.loader.js";
+
+        var config = {
+          arguments: [],
+          dataUrl: dataBlobUrl,
+          frameworkUrl: cdnBase + "/Downloads.framework.js",
+          codeUrl: wasmBlobUrl,
+          companyName: "Blukulele",
+          productName: "GamboNanza",
+          productVersion: "1.0",
+          showBanner: unityShowBanner
+        };
+
+        var script = document.createElement("script");
+        script.src = loaderUrl;
+        script.onload = () => {
+          createUnityInstance(canvas, config, (progress) => {
+            var currentPercent = Math.round(80 + (progress * 20));
+            percentText.innerText = currentPercent + "%";
+            if (progressBar) progressBar.style.width = currentPercent + "%";
+            if (progress >= 1) {
+              stageText.innerText = "Starting Game...";
+            }
+          }).then((unityInstance) => {
+            if (loaderUI) loaderUI.style.display = "none";
+          }).catch((message) => {
+            alert("Unity Launch Error: " + message);
+          });
+        };
+        document.body.appendChild(script);
+      }
+
+      launchGame().catch(function(err) {
+        console.error("Assembly Error:", err);
+        stageText.innerText = "Stream Interrupted";
+        stageText.style.color = "#ff4d4d";
+        mbText.innerText = "Error Loading Chunks";
+        speedText.innerText = "0.0 MB/s";
+        unityShowBanner("CDN stream failed to assemble payload. Check browser console.", "error");
+      });
+    </script>
+  </body>
+</html>
